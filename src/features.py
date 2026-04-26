@@ -1,7 +1,7 @@
 # src/features.py
 
 import numpy as np
-from src.logistic_regression import score_prior
+from src.classifier import score_prior
 from src.models import Case
 
 def build_case_features(case: Case, runtime):

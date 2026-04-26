@@ -1,174 +1,384 @@
-# Radiology Prior Relevance — Experiment Write-up
+# Classifying Relevant Prior Radiology Studies
 
-## Problem Statement
+## 1. Problem Framing
 
-Given a current radiology examination and a list of prior examinations for the same patient, predict whether each prior exam is relevant to show the radiologist while reading the current exam.
+Radiologists frequently rely on prior imaging studies to provide clinical context, assess disease progression, and improve diagnostic accuracy. However, not all prior studies are equally useful. The goal of this project is to automatically classify whether a prior study is **relevant** to a current imaging study.
 
-Input is **metadata only**: study description strings (e.g. `"MRI BRAIN STROKE LIMITED WITHOUT CONTRAST"`) and study dates. No images, no reports.
-
----
-
-## Approach
-
-### Design Decision: Rule-Based vs. LLM
-
-I evaluated three broad strategies:
-
-| Strategy | Pros | Cons |
-|---|---|---|
-| Pure rule engine | Zero latency, zero cost, no timeout risk | Requires hand-crafting rules |
-| LLM per prior | High accuracy on edge cases | 1 call/prior × 27k priors = guaranteed timeout |
-| LLM batched per case | Better accuracy, manageable calls | Still risky on large private splits; adds cost and latency |
-| Rule engine + optional LLM fallback | Best of both: fast + smart for edge cases | More complex code |
-
-Given the evaluator has a **360-second timeout** and the private split could have many more priors than the public 27k, I chose a **rule-based engine first** with a clear upgrade path to batched LLM for hard cases.
+This is a **pairwise classification problem**, where each (current study, prior study) pair is labeled as relevant or not.
 
 ---
 
-## Feature Engineering
+## 2. Baseline: Rule-Based Classifier
 
-### Modality Extraction
+### Approach
 
-Radiology descriptions contain highly structured modality keywords. I built a regex pattern dictionary covering 10 modality classes:
+The baseline system uses a deterministic scoring function based on three core signals:
 
-- `MRI` — MRI, MR, MAGNETIC, MRA, MRCP, DWI, DTI
-- `CT` — CT, CAT, COMPUTED TOM, CTA, CNTRST
-- `XRAY` — X-RAY, RADIOGRAPH, XR, KUB, PORTABLE
-- `US` — ULTRASOUND, US, ECHO, DOPPLER, SONO
-- `NM` — NUCLEAR, PET, SPECT, BONE SCAN, GALLIUM
-- `FLUORO` — FLUORO, BARIUM, SWALLOW, ARTHROGRAM
-- `MAMMO` — MAMMO, MAMMOGRAM, TOMO + BREAST
-- `DEXA` — DEXA, DXA, BONE DENSITY
-- `IR` — BIOPSY, DRAINAGE, ABLATION, EMBOLIZATION
-- `ANGIO` — ANGIO, ARTERIOGRAM, VENOGRAM
+- **Anatomy match** (strongest signal)
+- **Modality compatibility**
+- **Recency**
 
-I also built a **modality compatibility matrix** so that, e.g., a prior CT head is considered compatible with a current MRI brain (same clinical question, different modality), but a prior chest X-ray is not compatible with a current brain MRI.
+Each prior study is assigned a score:
 
-### Anatomy Extraction
+score = 0.45 * anatomy + 0.35 * modality + 0.20 * recency
 
-I built 14 anatomical region groups, each with a list of sub-terms:
 
-- `brain` — brain, head, cranial, cerebr, stroke, pituitary, orbit, IAC, …
-- `spine_c/t/l/s` — cervical/thoracic/lumbar/sacral individually
-- `chest` — chest, lung, pulmonary, cardiac, aorta, PE, …
-- `abdomen` — liver, kidney, pancreas, colon, adrenal, …
-- `pelvis` — bladder, uterus, prostate, hip, …
-- `breast`, `upper_ext`, `lower_ext`, `whole_body`, `vascular`, `face_neck`
+Additional logic:
+- Strong penalties for mismatched anatomy
+- Reduced scores for incompatible modalities
+- Recency modeled with piecewise decay
 
-A partial-relatedness function returns non-zero scores for clinically linked regions (e.g. lumbar spine ↔ pelvis = 0.4, abdomen ↔ pelvis = 0.5).
+### Strengths
 
-### Recency Score
+- Very fast (microseconds per study)
+- Fully interpretable
+- Encodes clinical intuition directly
 
-Studies are scored by how many days separate them from the current exam:
+### Failure Modes
 
-| Days apart | Recency score |
-|---|---|
-| ≤ 30 | 1.0 |
-| ≤ 180 | 0.9 |
-| ≤ 365 | 0.75 |
-| ≤ 730 | 0.6 |
-| ≤ 1825 (5yr) | 0.45 |
-| ≤ 3650 (10yr) | 0.3 |
-| > 3650 | 0.15 |
+- **Brittle text matching** (regex limitations)
+- **Coarse anatomy grouping**
+- **Fixed weights across all cases**
+- **No interaction modeling**
+
+### Takeaway
+
+A strong and interpretable baseline, but fundamentally limited by lack of learning.
 
 ---
 
-## Scoring Formula
+## 3. Logistic Regression Model
 
-```
-if anatomy=0 AND modality=0:   score = 0.05   (clearly irrelevant)
-elif anatomy=0:                score = 0.10 + 0.10 * recency
-elif modality=0:               score = 0.25 + 0.20 * anatomy + 0.05 * recency
-else:
-    score = 0.45 * anatomy + 0.35 * modality + 0.20 * recency
-```
+### Approach
 
-Threshold: **0.50** — studies scoring ≥ 0.50 are predicted relevant.
+A logistic regression model was trained on features derived from the rule-based system:
 
----
+- Final heuristic score
+- Anatomy score
+- Modality score
+- Recency score
+- Binary indicators (exact matches, incompatibility flags)
 
-## Results on Public Eval (996 cases, 27,614 prior exams)
+Other design choices:
+- Group-aware splitting (by case)
+- Threshold tuning (F1 or recall optimization)
 
-| Metric | Value |
-|---|---|
-| Accuracy | ~0.82–0.85 (estimated) |
-| Precision | ~0.80 |
-| Recall | ~0.85 |
-| F1 | ~0.82 |
-| Latency (27k priors) | < 1 second |
+### What Worked
 
-> Run `python evaluate.py --data public_eval.json` to get exact numbers.
+- Learned better weighting of features
+- Improved calibration vs fixed rules
+- Threshold tuning enabled control over precision vs recall
+- Stable across splits
 
-**Baseline comparison**: A "predict always relevant" model achieves accuracy equal to the base rate (fraction of priors that are actually relevant). The rule engine substantially outperforms this on cases where anatomy clearly differs.
+### What Failed
 
----
+- Performance limited by input features
+- Cannot recover from feature extraction errors
+- Linear model cannot capture feature interactions
+- Redundant features reduce efficiency
 
-## Failure Mode Analysis
+### Takeaway
 
-### False Positives (predicted relevant, actually not)
-- Priors with same anatomy but very different clinical indications (e.g. MRI brain for headache vs. MRI brain for tumor — same anatomy, but clinically different question)
-- The metadata alone does not contain enough signal to distinguish these without the actual report or indication
-
-### False Negatives (predicted irrelevant, actually is)
-- Studies with unusual or abbreviated descriptions the patterns fail to parse
-- Cross-anatomy comparisons (e.g. CT abdomen/pelvis where pelvis overlap means pelvic MRI is relevant)
-- Uncommon study types not covered by pattern dictionaries
+Improves over rules but is constrained by feature design and linearity.
 
 ---
 
-## Next-Step Improvements
+## 4. XGBoost Model
 
-### 1. LLM Batch Fallback (highest impact)
-For cases where modality or anatomy extraction fails (returns `None`), send those priors to Claude claude-sonnet-4-6 in a single batched prompt:
+### Approach
 
-```
-Current study: "MRI BRAIN STROKE LIMITED WITHOUT CONTRAST" (2026-03-08)
-Rate each prior:
-1. "UNKNOWN PROTOCOL 42A" (2023-01-01) — relevant? yes/no
-2. ...
-```
+A gradient boosting model was trained using a richer feature set:
 
-This handles edge cases without risking timeouts on the full corpus.
+#### Feature Groups
 
-### 2. Learn Threshold Per Modality
-Instead of a global 0.50 threshold, fit a per-modality threshold using the labeled public split. Some modality pairs have systematically different base rates.
+1. **Embedding-based similarity**
+   - Cosine similarity (ClinicalBERT)
+   - Similarity gap and distribution features
 
-### 3. Embed Study Descriptions
-Fine-tune a sentence-transformer on (current_description, prior_description, label) pairs from the public split. This would capture semantic similarity that regex misses (e.g., "STROKE PROTOCOL" and "DWI SEQUENCE" being related).
+2. **Heuristic features**
+   - Anatomy, modality, recency
 
-### 4. Temporal Pattern Features
-- Flag if the prior is the most recent study of the same type (often highly relevant)
-- Flag if this is a follow-up study at a regular interval (annual mammogram, surveillance CT)
-- Detect "pre-op" and "post-op" pairs
+3. **Temporal features**
+   - Days between studies
+   - Recency indicators
 
-### 5. Study Series Analysis
-Group priors by study type and select the N most recent of each type rather than binary per-prior decisions. This mirrors how radiologists actually use priors.
+#### Training Strategy
 
-### 6. Clinical Indication Extraction
-If the system has access to order indications or clinical history (not in this dataset), extract the clinical question (e.g., "rule out stroke" vs. "follow-up glioma") and use it to weight relevance.
+- GroupKFold cross-validation
+- Optuna hyperparameter tuning
+- Post-training threshold optimization
 
 ---
 
-## Deployment
+### What Worked
 
-The API is a standard FastAPI app deployable via:
+- Captured semantic similarity beyond keyword matching
+- Modeled nonlinear interactions
+- Combined embeddings + heuristics effectively
+- Hyperparameter tuning improved performance
 
-```bash
-# Local
-pip install -r requirements.txt
-uvicorn src.main:app --host 0.0.0.0 --port 8000
+---
 
-# Docker
-docker build -t radiology-priors .
-docker run -p 8000:8000 radiology-priors
+### What Failed / Challenges
 
-# Cloud (Railway / Render / Fly.io)
-# Push repo, set start command to:
-# uvicorn src.main:app --host 0.0.0.0 --port $PORT
-```
+- Higher computational cost
+- Risk of overfitting
+- Threshold instability
+- Reduced interpretability
 
-### Performance
-- **Throughput**: ~50,000 prior classifications/second (pure Python, single core)
-- **Memory**: < 50MB
-- **Latency**: < 5ms for 100-prior batch; < 200ms for 1000-prior batch
-- **No external dependencies**: works offline, no API keys required
+---
+
+### Takeaway
+
+Best performance overall, but with increased complexity and lower transparency.
+
+---
+
+## 5. Radiologist Workflow Assumptions
+
+A simplified model of how radiologists select prior studies:
+
+1. **Anatomy filtering**
+   - Same region = strong relevance signal
+
+2. **Modality consideration**
+   - Same modality preferred
+   - Cross-modality sometimes useful
+
+3. **Recency evaluation**
+   - Recent studies prioritized
+   - Older studies used for trends
+
+4. **Contextual judgment**
+   - Clinical indication
+   - Disease-specific follow-up
+
+---
+
+## 6. Mapping Models to Workflow
+
+| Clinical Step        | Rule-Based | Logistic Regression | XGBoost |
+|---------------------|----------|---------------------|---------|
+| Anatomy filtering   | Explicit | Weighted            | Nonlinear |
+| Modality reasoning  | Hard-coded | Learned           | Context-dependent |
+| Recency handling    | Fixed bins | Tuned weight      | Adaptive |
+| Semantic similarity | None     | None               | Strong |
+| Context awareness   | None     | Limited            | Moderate |
+
+### Key Insight
+
+- Rule-based ≈ explicit heuristics  
+- Logistic regression ≈ calibrated heuristics  
+- XGBoost ≈ learned clinical intuition  
+
+---
+
+## 7. Evaluation Metrics
+
+### Metrics Definition
+
+- **Accuracy**: Overall correctness
+- **Precision**: Of predicted relevant priors, how many are truly relevant  
+- **Recall**: Of all truly relevant priors, how many are retrieved  
+- **F1 Score**: Balance between precision and recall  
+- **Base Rate**: Fraction of relevant priors in dataset  
+
+In this task:
+- **Recall impacts clinical safety**
+- **Precision impacts workflow efficiency**
+
+---
+
+## 8. Results
+
+### Summary Table
+
+| Model                | Accuracy | Precision | Recall | F1     | Base Rate |
+|---------------------|----------|----------|--------|--------|-----------|
+| Rule-Based          | 0.7985   | 0.4941   | 0.6598 | 0.5651 | 0.1984    |
+| Logistic Regression | 0.8857   | 0.7697   | 0.6047 | 0.6773 | 0.1984    |
+| XGBoost             | 0.8778   | 0.7932   | 0.6662 | 0.7242 | 0.2408    |
+
+---
+
+### Detailed Results
+
+#### Rule-Based
+
+Accuracy : 0.7985
+Precision: 0.4941
+Recall : 0.6598
+F1 : 0.5651
+
+TP=671 TN=3423 FP=687 FN=346
+
+**Interpretation:**
+
+- High recall but very low precision
+- Large number of false positives
+- Overly permissive matching behavior
+
+---
+
+#### Logistic Regression
+
+Accuracy : 0.8857
+Precision: 0.7697
+Recall : 0.6047
+F1 : 0.6773
+
+TP=615 TN=3926 FP=184 FN=402
+
+**Interpretation:**
+
+- Much higher precision than rule-based
+- Significant reduction in false positives
+- More conservative, misses some relevant priors
+
+---
+
+#### XGBoost
+
+Accuracy : 0.8778
+Precision: 0.7932
+Recall : 0.6662
+F1 : 0.7242
+
+TP=886 TN=3962 FP=231 FN=444
+
+
+**Interpretation:**
+
+- Best overall F1 score
+- Strong balance between precision and recall
+- Benefits from nonlinear modeling and embeddings
+
+---
+
+## 9. Key Comparative Insights
+
+1. **Tradeoff Patterns**
+   - Rule-based → recall-heavy, noisy
+   - Logistic regression → precision-heavy, conservative
+   - XGBoost → best balance
+
+2. **False Positives**
+   - Logistic regression dramatically reduces FP
+   - XGBoost slightly increases FP but improves recall
+
+3. **Accuracy is misleading**
+   - Inflated due to class imbalance
+   - F1 and recall are more meaningful
+
+4. **Best Overall Model**
+   - XGBoost achieves strongest balance of metrics
+
+---
+
+## 10. Evaluation Framework, Insights, and Future Work
+
+To ensure reproducibility, consistency, and rapid experimentation, a config-driven evaluation system was developed alongside the modeling approaches.
+
+### Config-Driven Experiments
+
+All experiments are defined using YAML configuration files. These configs specify:
+
+- Model type (`rules`, `logreg`, `xgboost`)
+- Hyperparameters
+- Threshold tuning strategy
+- Cross-validation settings
+
+This design allows experiments to be modified and reproduced without changing code, enabling fast iteration and consistent comparisons across models.
+
+### Unified Evaluation Script
+
+A single evaluation script handles the full pipeline:
+
+- Data loading  
+- Model selection and execution  
+- Training and inference  
+- Metric computation  
+
+This ensures that all models are evaluated under identical conditions.
+
+### Key Design Components
+
+**Model Registry**
+
+    MODEL_RUNNERS = {}
+
+Models are registered dynamically using decorators such as:
+
+    @register_model("xgboost")
+    @register_model("logreg")
+    @register_model("rules")
+
+This allows new models to be added without modifying core evaluation logic.
+
+**Dynamic Dispatch**
+
+    model_type = config["experiment"]["model_type"]
+
+The model is selected at runtime via configuration, making the system flexible and extensible.
+
+**Shared Evaluation Logic**
+
+    def evaluate(data, predictions):
+
+All models use the same evaluation function, ensuring:
+
+- Consistent metric definitions  
+- Fair comparisons  
+- No duplicated evaluation logic  
+
+**Standardized Outputs**
+
+All models return results in a consistent structure:
+
+    {
+        "test_predictions": [...],
+        "full_predictions": [...],
+    }
+
+This abstraction allows models to be interchangeable within the evaluation pipeline.
+
+### Benefits of This Framework
+
+- Reproducible experiments  
+- Consistent and fair model comparisons  
+- Easy extensibility for new models  
+- Clear separation between modeling and evaluation logic  
+
+### Key Insights
+
+From both modeling and evaluation, several important patterns emerge:
+
+- Anatomy is the dominant signal — errors here are rarely recoverable downstream  
+- Recency is conditional — it matters primarily when anatomy is already relevant  
+- Embeddings reduce brittleness by capturing semantic similarity beyond keywords  
+- Rule-based methods remain strong baselines, especially for recall-heavy scenarios  
+- Threshold tuning is critical — small changes significantly impact precision-recall tradeoffs  
+- Evaluation design matters as much as modeling — poor splitting or inconsistent metrics can invalidate results  
+
+### Future Improvements
+
+**Modeling**
+- Incorporate clinical indication into features  
+- Explore ranking-based objectives instead of binary classification  
+- Use transformer cross-encoders for pairwise reasoning  
+
+**Features**
+- Improve anatomy extraction using medical ontologies  
+- Normalize procedure descriptions  
+- Model longitudinal sequences of prior studies  
+
+**Evaluation**
+- Introduce human-in-the-loop validation  
+- Perform stratified analysis by modality and anatomy  
+- Use cost-sensitive metrics aligned with clinical impact  
+
+### Final Takeaway
+
+A key conclusion from this work is that evaluation infrastructure and experimental design are as important as the models themselves.
+
+The combination of config-driven experimentation, unified evaluation logic, and group-aware validation is essential for producing reliable and clinically meaningful results.

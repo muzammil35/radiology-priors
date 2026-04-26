@@ -1,0 +1,57 @@
+experiment:
+  name: xgboost_case_study_v1
+  model_type: xgboost
+
+model:
+  n_estimators: 500
+  eval_metric: logloss
+  random_state: 42
+
+  learning_rate:
+    min: 0.01
+    max: 0.2
+    log: true
+
+  max_depth:
+    min: 2
+    max: 6
+
+  subsample:
+    min: 0.5
+    max: 1.0
+
+  colsample_bytree:
+    min: 0.5
+    max: 1.0
+
+  min_child_weight:
+    min: 1
+    max: 10
+
+  reg_lambda:
+    min: 0.01
+    max: 10.0
+    log: true
+
+  reg_alpha:
+    min: 0.001
+    max: 5.0
+    log: true
+
+
+threshold:
+  strategy: f1   # f1 | accuracy
+  search_range:
+    min: 0.1
+    max: 0.9
+    steps: 50
+
+
+cv:
+  n_splits: 3
+  group: case_id
+
+
+optuna:
+  direction: maximize
+  n_trials: 30

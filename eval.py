@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Evaluation script for XGBoost model (clean + stable version)
+Evaluation script (multi-model, config-driven)
 """
 
 import argparse
@@ -8,11 +8,24 @@ import json
 import time
 import logging
 from typing import List
+import yaml
 
 from src.models import Case, Study
-from src.train import run_full_pipeline
 
 logging.basicConfig(level=logging.WARNING)
+
+
+# -----------------------------
+# Model registry
+# -----------------------------
+MODEL_RUNNERS = {}
+
+
+def register_model(name):
+    def wrapper(fn):
+        MODEL_RUNNERS[name] = fn
+        return fn
+    return wrapper
 
 
 # -----------------------------
@@ -34,14 +47,12 @@ def build_truth(data: dict):
 
 
 # -----------------------------
-# Run model
+# XGBoost runner
 # -----------------------------
-def run_xgboost(data: dict):
+@register_model("xgboost")
+def run_xgboost(data: dict, config: dict):
 
-    from src.decision_tree import (
-        build_train_and_test_set,
-        train_xgboost
-    )
+    from src.xgboost_pipeline import run_full_pipeline
 
     truth_dict = build_truth(data)
 
@@ -56,10 +67,78 @@ def run_xgboost(data: dict):
         for c in data["cases"]
     ]
 
-    output_bundle = run_full_pipeline(cases, truth_dict)
+    output_bundle = run_full_pipeline(
+        cases,
+        truth_dict,
+    )
     output = output_bundle["model_output"]
 
     return output
+
+
+# -----------------------------
+# Placeholder: Logistic Regression
+# -----------------------------
+@register_model("logreg")
+def run_logreg(data: dict, config: dict):
+
+    from src.logregression_pipeline import run_logregression_pipeline
+
+    truth_dict = build_truth(data)
+
+    cases = [
+        Case(
+            case_id=c["case_id"],
+            patient_id=c["patient_id"],
+            patient_name=c.get("patient_name"),
+            current_study=Study(**c["current_study"]),
+            prior_studies=[Study(**s) for s in c["prior_studies"]],
+        )
+        for c in data["cases"]
+    ]
+
+    return run_logregression_pipeline(cases, truth_dict, config=config)
+
+
+# -----------------------------
+# Placeholder: Rules-based model
+# -----------------------------
+@register_model("rules")
+def run_rules(data: dict, config: dict):
+
+    from src.classifier import RelevanceClassifier, run_rules_based_pipeline
+    classifier = RelevanceClassifier(threshold=config["threshold"])
+
+    truth_dict = build_truth(data)
+
+    cases = [
+        Case(
+            case_id=c["case_id"],
+            patient_id=c["patient_id"],
+            patient_name=c.get("patient_name"),
+            current_study=Study(**c["current_study"]),
+            prior_studies=[Study(**s) for s in c["prior_studies"]],
+        )
+        for c in data["cases"]
+    ]
+
+    return run_rules_based_pipeline(cases, truth_dict, config, classifier)
+
+
+# -----------------------------
+# Dispatcher
+# -----------------------------
+def run_model(data: dict, config: dict):
+
+    model_type = config["experiment"]["model_type"]
+
+    if model_type not in MODEL_RUNNERS:
+        raise ValueError(
+            f"Unknown model_type='{model_type}'. "
+            f"Available: {list(MODEL_RUNNERS.keys())}"
+        )
+
+    return MODEL_RUNNERS[model_type](data, config)
 
 
 # -----------------------------
@@ -165,9 +244,15 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", required=True)
+    parser.add_argument("--config", required=True)
     args = parser.parse_args()
 
+    with open(args.config) as f:
+        config = yaml.safe_load(f)
+
+    print(f"Model type: {config['experiment']['model_type']}")
     print(f"Loading data: {args.data}")
+
     data = load_eval_data(args.data)
 
     print(
@@ -178,18 +263,14 @@ def main():
     t0 = time.time()
 
     print("Running model...")
-    output = run_xgboost(data)
+    output = run_model(data, config)
 
     print(f"Done in {time.time() - t0:.2f}s")
 
-    # -----------------------------
     # ONLY evaluate TEST split
-    # -----------------------------
     results = evaluate(data, output["test_predictions"])
 
     print_results("TEST SET EVALUATION", results)
-
-    
 
 
 if __name__ == "__main__":

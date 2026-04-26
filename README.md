@@ -6,7 +6,7 @@ Predicts whether prior radiology examinations should be shown to a radiologist r
 
 ```bash
 pip install -r requirements.txt
-uvicorn src.main:app --host 0.0.0.0 --port 8000
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 uvicorn src.app:app --host 0.0.0.0 --port 8000
 ```
 
 ## Test It
@@ -45,11 +45,8 @@ curl -X POST http://localhost:8000/predict \
 
 ```bash
 # Download public_eval.json from the challenge page, then:
-python evaluate.py --data public_eval.json
+python eval.py --data public_eval.json --config config/<config file with tunable params>
 
-# Or test against a running server:
-python evaluate.py --data public_eval.json --url http://localhost:8000/predict
-```
 
 ## Run Tests
 
@@ -65,22 +62,8 @@ docker build -t radiology-priors .
 docker run -p 8000:8000 radiology-priors
 ```
 
-## Deploy to Render / Railway
-
-1. Push this repo to GitHub
-2. Create a new Web Service
-3. Set start command: `uvicorn src.main:app --host 0.0.0.0 --port $PORT`
-4. Deploy — your endpoint is ready
-
 ## Architecture
 
-```
-POST /predict
-    │
-    ├── Extract modality (regex patterns, 10 classes)
-    ├── Extract anatomy (keyword groups, 14 regions)  
-    ├── Compute recency score (date delta)
-    └── Weighted combination → threshold 0.50 → true/false
-```
+
 
 See `WRITEUP.md` for full experiment details and next steps.

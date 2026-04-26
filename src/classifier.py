@@ -335,3 +335,113 @@ class RelevanceClassifier:
             ))
 
         return predictions
+    
+from sklearn.model_selection import GroupShuffleSplit
+
+
+    
+def run_rules_based_pipeline(cases, truth_dict=None, config=None, classifier=None):
+    # --------------------------
+    # Generate predictions (FULL DATA)
+    # --------------------------
+    full_predictions = []
+
+    for case in cases:
+        preds = classifier.classify_case(case)
+        for p in preds:
+            full_predictions.append({
+                "case_id": p.case_id,
+                "study_id": p.study_id,
+                "predicted_is_relevant": bool(p.predicted_is_relevant),
+                # optional but recommended for consistency:
+                "probability": getattr(p, "probability", None),
+            })
+
+    # --------------------------
+    # TEST SPLIT (optional but recommended for parity)
+    # --------------------------
+    if truth_dict is not None and config is not None:
+        X, y, ids, groups = build_train_test_set(cases, truth_dict, config)
+
+        gss = GroupShuffleSplit(
+            test_size=0.2,
+            random_state=config["cv"].get("random_state", 42)
+        )
+
+        train_idx, test_idx = next(gss.split(X, y, groups=groups))
+
+        test_ids = [ids[i] for i in test_idx]
+        y_test = [y[i] for i in test_idx]
+
+        # filter full predictions into test_predictions
+        test_set = set(test_ids)
+
+        test_predictions = [
+            p for p in full_predictions
+            if (p["case_id"], p["study_id"]) in test_set
+        ]
+    else:
+        test_predictions = None
+        y_test = None
+
+    # --------------------------
+    # RETURN (MATCH LOGREG FORMAT)
+    # --------------------------
+    return {
+        "model": classifier,   # or "rules_based"
+        "threshold": None,     # rules don't have one
+        "metrics": None,       # optionally compute later
+        "test_predictions": test_predictions,
+        "full_predictions": full_predictions,
+        "test_truth": list(zip(test_ids, y_test)) if y_test is not None else None,
+    }
+
+from typing import List, Tuple, Dict, Any, Optional
+
+def build_train_test_set(
+    cases: List["Case"],
+    truth_dict: Dict[Tuple[str, str], bool],
+    config: Optional[dict] = None,
+):
+    """
+    Build dataset for train/test splitting.
+
+    Each sample corresponds to (current study, prior study) pair.
+
+    Returns:
+        X: list of feature placeholders (not used in rule-based model)
+        y: list of labels
+        ids: list of (case_id, study_id)
+        groups: list of case_id (for GroupShuffleSplit)
+    """
+
+    X = []
+    y = []
+    ids = []
+    groups = []
+
+    for case in cases:
+        case_id = case.case_id
+        current = case.current_study
+
+        for prior in case.prior_studies:
+            key = (case_id, prior.study_id)
+
+            # skip unlabeled pairs
+            if truth_dict is not None and key not in truth_dict:
+                continue
+
+            X.append({
+                "current": current,
+                "prior": prior,
+            })
+
+            ids.append(key)
+            groups.append(case_id)
+
+            if truth_dict is not None:
+                y.append(bool(truth_dict[key]))
+            else:
+                y.append(None)
+
+    return X, y, ids, groups

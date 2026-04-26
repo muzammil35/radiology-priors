@@ -1,0 +1,8 @@
+experiment:
+  name: Relevance_Classifer_v1
+  model_type: rules
+
+threshold: 0.5
+
+cv:
+  random_state: 42
