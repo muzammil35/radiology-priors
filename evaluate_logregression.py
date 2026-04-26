@@ -44,11 +44,8 @@ def run_logregression(data: dict):
     Runs your logistic regression model in-process.
     """
 
-    import os
-    sys.path.insert(0, os.path.dirname(__file__))
-
-    from src.logregression import build_train_and_test_set
-    from src.logregression import train_logregression  
+    from src.logistic_regression import build_train_and_test_set
+    from src.logistic_regression import train_logregression  
 
     # build truth dict
     truth_dict = build_truth(data)

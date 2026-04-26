@@ -5,13 +5,12 @@ Evaluation script for XGBoost model (clean + stable version)
 
 import argparse
 import json
-import sys
 import time
 import logging
 from typing import List
 
 from src.models import Case, Study
-from src.train import run_full_pipeline, save_model
+from src.train import run_full_pipeline
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -39,10 +38,7 @@ def build_truth(data: dict):
 # -----------------------------
 def run_xgboost(data: dict):
 
-    import os
-    sys.path.insert(0, os.path.dirname(__file__))
-
-    from src.decision_trees import (
+    from src.decision_tree import (
         build_train_and_test_set,
         train_xgboost
     )

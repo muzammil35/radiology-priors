@@ -1,5 +1,5 @@
 from xgboost import XGBClassifier
-from src.logregression import score_prior
+from src.logistic_regression import score_prior
 import numpy as np
 from typing import List
 from src.models import Case
@@ -207,7 +207,7 @@ def find_best_threshold(y_true, probs):
 # =========================================================
 # FINAL TRAINING (SIMPLIFIED + CLEAN)
 # =========================================================
-def train_xgboost(X, y, ids, groups, best_params, ):
+def train_xgboost(X, y, ids, groups, best_params ):
 
     X = np.array(X)
     y = np.array(y)
@@ -282,8 +282,7 @@ def run_full_pipeline(cases, truth_dict):
 
     print("\nTraining final model...")
     output = train_xgboost(
-        X, y, ids, groups,
-        best_params,
+        X, y, ids, groups, best_params,
     )
 
     return {
