@@ -11,7 +11,7 @@ import logging
 from typing import List
 
 from src.models import Case, Study
-from src.train import run_full_pipeline
+from src.train import run_full_pipeline, save_model
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -192,6 +192,8 @@ def main():
     results = evaluate(data, output["test_predictions"])
 
     print_results("TEST SET EVALUATION", results)
+
+    
 
 
 if __name__ == "__main__":
