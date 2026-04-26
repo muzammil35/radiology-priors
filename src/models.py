@@ -7,7 +7,6 @@ class Study(BaseModel):
     study_description: str
     study_date: str  # ISO date string
 
-
 class Case(BaseModel):
     case_id: str
     patient_id: str
@@ -15,6 +14,11 @@ class Case(BaseModel):
     current_study: Study
     prior_studies: List[Study]
 
+class RequestPayload(BaseModel):
+    challenge_id: str
+    schema_version: int
+    generated_at: str
+    cases: List[Case]
 
 class ChallengeRequest(BaseModel):
     challenge_id: str

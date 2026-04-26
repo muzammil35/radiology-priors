@@ -225,6 +225,8 @@ def train_xgboost(X, y, ids, groups, best_params, ):
     train_probs = model.predict_proba(X_train)[:, 1]
     best_threshold, best_f1 = find_best_threshold(y_train, train_probs)
 
+    save_model(model, best_threshold)
+
     print(f"Best threshold (train): {best_threshold:.3f}, F1={best_f1:.4f}")
 
     # apply to test
@@ -290,3 +292,15 @@ def run_full_pipeline(cases, truth_dict):
         "best_params": best_params,
         "threshold": output["threshold"],
     }
+
+
+import joblib
+
+def save_model(model, threshold, path="model_bundle.pkl"):
+    joblib.dump(
+        {
+            "model": model,
+            "threshold": threshold,
+        },
+        path
+    )
