@@ -1,8 +1,5 @@
 from src.classifier import score_prior
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
-from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 import numpy as np
 from sklearn.metrics import f1_score, recall_score, precision_score

@@ -1,0 +1,8 @@
+[project]
+name = "radiology-priors"
+version = "0.1.0"
+dependencies = []
+
+[tool.setuptools]
+packages = ["src"]
+

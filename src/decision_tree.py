@@ -2,11 +2,9 @@
 from xgboost import XGBClassifier
 from src.logistic_regression import find_threshold_for_target_recall, score_prior
 import numpy as np
-from src.encoder import Encoders
 from typing import List
 from src.models import Case
 from src.clinical_bert import ClinicalBERTEncoder, CaseEncoder
-from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GroupShuffleSplit, GroupKFold
 import optuna
 
@@ -62,7 +60,7 @@ def build_train_and_test_set(cases: List[Case], truth_dict):
 
             features = [
 
-                # ⭐ PRIMARY SIGNAL (ClinicalBERT)
+                # PRIMARY SIGNAL (ClinicalBERT)
                 sim,
                 max_sim,
                 sim_gap,

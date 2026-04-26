@@ -15,7 +15,8 @@ import logging
 from datetime import datetime, date
 from typing import List, Tuple, Optional, Dict
 from functools import lru_cache
-
+from collections import defaultdict
+from typing import Dict, List
 from .models import Case, Prediction, Study
 
 logger = logging.getLogger(__name__)
@@ -123,11 +124,18 @@ ANATOMY_GROUPS: Dict[str, List[str]] = {
                      "tmo", "tmj", "parotid", "thyroid", "soft tissue neck", "neck"],
 }
 
-# Pre-flatten anatomy terms for faster lookup
-_ANATOMY_FLAT: Dict[str, str] = {}  # term -> group_name
-for group, terms in ANATOMY_GROUPS.items():
-    for term in terms:
-        _ANATOMY_FLAT[term] = group
+
+def build_anatomy_flat(groups: Dict[str, List[str]]) -> Dict[str, set]:
+    flat: Dict[str, set] = defaultdict(set)
+
+    for group, terms in groups.items():
+        for term in terms:
+            t = term.lower().strip()
+            flat[t].add(group)
+
+    return dict(flat)
+
+_ANATOMY_FLAT = build_anatomy_flat(ANATOMY_GROUPS)
 
 
 @lru_cache(maxsize=4096)
@@ -142,15 +150,16 @@ def extract_modality(description: str) -> Optional[str]:
 
 
 @lru_cache(maxsize=4096)
-def extract_anatomy(description: str) -> Optional[str]:
-    """Extract the primary anatomical region from a study description."""
+def extract_anatomy(description: str) -> Optional[set]:
     desc = description.lower()
-    # Longer terms first to avoid partial matches
+
+    matches = set()
+
     for term in sorted(_ANATOMY_FLAT.keys(), key=len, reverse=True):
         if term in desc:
-            return _ANATOMY_FLAT[term]
-    return None
+            matches.update(_ANATOMY_FLAT[term])
 
+    return matches if matches else None
 
 
 def parse_date(date_str: str) -> Optional[date]:
@@ -166,13 +175,6 @@ def days_between(d1: Optional[date], d2: Optional[date]) -> Optional[int]:
         return None
     return abs((d1 - d2).days)
 
-
-def fallback_modality(desc, cur_anatomy):
-    heuristic_mod = heuristic_modality(desc)
-    if not heuristic_mod:
-        if cur_anatomy:
-            return DEFAULT_MODALITY_BY_REGION.get(cur_anatomy)
-    return heuristic_mod
 
 
 def score_prior(
@@ -194,13 +196,6 @@ def score_prior(
 
     cur_anatomy = extract_anatomy(current.study_description)
     pri_anatomy = extract_anatomy(prior.study_description)
-
-    if cur_modality is None:
-        cur_modality = fallback_modality(current.study_description, cur_anatomy)
-
-    if pri_modality is None:
-        pri_modality = fallback_modality(prior.study_description, pri_anatomy)
-    
 
     #similarity = compute_similarity(current.study_description, prior.study_description)
 
@@ -228,11 +223,15 @@ def score_prior(
     # --- Anatomy score ---
     anatomy_score = 0.0
     if cur_anatomy and pri_anatomy:
-        if cur_anatomy == pri_anatomy:
+        if cur_anatomy & pri_anatomy:
             anatomy_score = 1.0
         else:
-            # Check for clinically related regions
-            anatomy_score = _anatomy_relatedness(cur_anatomy, pri_anatomy)
+            # compute best pairwise relatedness
+            anatomy_score = max(
+                _anatomy_relatedness(a, b)
+                for a in cur_anatomy
+                for b in pri_anatomy
+            )
     elif cur_anatomy is None or pri_anatomy is None:
         anatomy_score = 0.3  # can't determine, be conservative
 

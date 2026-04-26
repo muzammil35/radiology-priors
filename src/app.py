@@ -2,9 +2,7 @@
 
 from fastapi import FastAPI
 import joblib
-import numpy as np
-
-from src.models import Case, RequestPayload
+from src.models import RequestPayload
 from src.features import build_case_features
 from src.inference_runtime import runtime
 
@@ -13,8 +11,6 @@ app = FastAPI()
 bundle = joblib.load("model_bundle.pkl")
 model = bundle["model"]
 threshold = bundle["threshold"]
-
-from typing import List
 
 @app.post("/predict")
 def predict(payload: RequestPayload):
